@@ -63,3 +63,5 @@ COPY --from=builder /subtensor/snapshot.json /
 COPY --from=builder /subtensor/raw_spec.json /
 COPY --from=builder /subtensor/raw_testspec.json /
 COPY --from=builder /subtensor/target/release/node-subtensor /usr/local/bin
+
+ENTRYPOINT ["/usr/local/bin/node-subtensor", "--chain=/raw_spec.json" , "--bootnodes=/ip4/13.58.175.193/tcp/30333/p2p/12D3KooWDe7g2JbNETiKypcKT1KsCEZJbTzEHCn8hpd4PHZ6pdz5"]
