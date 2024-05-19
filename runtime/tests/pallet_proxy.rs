@@ -1,10 +1,9 @@
+use codec::Encode;
 use frame_support::{assert_ok, traits::InstanceFilter, BoundedVec};
 use node_subtensor_runtime::{
     AccountId, BalancesCall, BuildStorage, Proxy, ProxyType, Runtime, RuntimeCall, RuntimeEvent,
     RuntimeGenesisConfig, RuntimeOrigin, SubtensorModule, System, SystemCall,
 };
-
-use frame_support::dispatch::Encode;
 
 const ACCOUNT: [u8; 32] = [1_u8; 32];
 const DELEGATE: [u8; 32] = [2_u8; 32];
@@ -112,6 +111,10 @@ fn call_add_stake() -> RuntimeCall {
 fn call_register() -> RuntimeCall {
     let block_number: u64 = 1;
     let netuid: u16 = 2;
+
+    // lower diff first
+    SubtensorModule::set_difficulty(netuid, 100);
+
     let (nonce, work): (u64, Vec<u8>) = SubtensorModule::create_work_for_block_number(
         netuid,
         block_number,

@@ -11,32 +11,32 @@ use frame_support::{
 };
 
 impl<T: Config> Pallet<T> {
-    // ---- The implementation for the extrinsic become_delegate: signals that this hotkey allows delegated stake.
-    //
-    // # Args:
-    // 	* 'origin': (<T as frame_system::Config>RuntimeOrigin):
-    // 		- The signature of the caller's coldkey.
-    //
-    // 	* 'hotkey' (T::AccountId):
-    // 		- The hotkey we are delegating (must be owned by the coldkey.)
-    //
-    // 	* 'take' (u16):
-    // 		- The stake proportion that this hotkey takes from delegations.
-    //
-    // # Event:
-    // 	* DelegateAdded;
-    // 		- On successfully setting a hotkey as a delegate.
-    //
-    // # Raises:
-    // 	* 'NotRegistered':
-    // 		- The hotkey we are delegating is not registered on the network.
-    //
-    // 	* 'NonAssociatedColdKey':
-    // 		- The hotkey we are delegating is not owned by the calling coldket.
-    //
-    // 	* 'TxRateLimitExceeded':
-    // 		- Thrown if key has hit transaction rate limit
-    //
+    /// ---- The implementation for the extrinsic become_delegate: signals that this hotkey allows delegated stake.
+    ///
+    /// # Args:
+    /// *  'origin': (<T as frame_system::Config>RuntimeOrigin):
+    ///     - The signature of the caller's coldkey.
+    ///
+    /// *  'hotkey' (T::AccountId):
+    ///     - The hotkey we are delegating (must be owned by the coldkey.)
+    ///
+    /// *  'take' (u16):
+    ///     - The stake proportion that this hotkey takes from delegations.
+    ///
+    /// # Event:
+    /// *  DelegateAdded;
+    ///     - On successfully setting a hotkey as a delegate.
+    ///
+    /// # Raises:
+    /// *  'NotRegistered':
+    ///     - The hotkey we are delegating is not registered on the network.
+    ///
+    /// *  'NonAssociatedColdKey':
+    ///     - The hotkey we are delegating is not owned by the calling coldket.
+    ///
+    /// *  'TxRateLimitExceeded':
+    ///     - Thrown if key has hit transaction rate limit
+    ///
     pub fn do_become_delegate(
         origin: T::RuntimeOrigin,
         hotkey: T::AccountId,
@@ -52,16 +52,8 @@ impl<T: Config> Pallet<T> {
         );
 
         // --- 2. Ensure we are delegating an known key.
-        ensure!(
-            Self::hotkey_account_exists(&hotkey),
-            Error::<T>::NotRegistered
-        );
-
         // --- 3. Ensure that the coldkey is the owner.
-        ensure!(
-            Self::coldkey_owns_hotkey(&coldkey, &hotkey),
-            Error::<T>::NonAssociatedColdKey
-        );
+        Self::do_take_checks(&coldkey, &hotkey)?;
 
         // --- 4. Ensure we are not already a delegate (dont allow changing delegate take.)
         ensure!(
@@ -76,11 +68,18 @@ impl<T: Config> Pallet<T> {
             Error::<T>::TxRateLimitExceeded
         );
 
+        // --- 5.1 Ensure take is within the min ..= InitialDefaultTake (18%) range
+        let min_take = MinTake::<T>::get();
+        let max_take = MaxTake::<T>::get();
+        ensure!(take >= min_take, Error::<T>::InvalidTake);
+        ensure!(take <= max_take, Error::<T>::InvalidTake);
+
         // --- 6. Delegate the key.
         Self::delegate_hotkey(&hotkey, take);
 
         // Set last block for rate limiting
         Self::set_last_tx_block(&coldkey, block);
+        Self::set_last_tx_block_delegate_take(&coldkey, block);
 
         // --- 7. Emit the staking event.
         log::info!(
@@ -95,38 +94,189 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    // ---- The implementation for the extrinsic add_stake: Adds stake to a hotkey account.
-    //
-    // # Args:
-    // 	* 'origin': (<T as frame_system::Config>RuntimeOrigin):
-    // 		- The signature of the caller's coldkey.
-    //
-    // 	* 'hotkey' (T::AccountId):
-    // 		- The associated hotkey account.
-    //
-    // 	* 'stake_to_be_added' (u64):
-    // 		- The amount of stake to be added to the hotkey staking account.
-    //
-    // # Event:
-    // 	* StakeAdded;
-    // 		- On the successfully adding stake to a global account.
-    //
-    // # Raises:
-    // 	* 'CouldNotConvertToBalance':
-    // 		- Unable to convert the passed stake value to a balance.
-    //
-    // 	* 'NotEnoughBalanceToStake':
-    // 		- Not enough balance on the coldkey to add onto the global account.
-    //
-    // 	* 'NonAssociatedColdKey':
-    // 		- The calling coldkey is not associated with this hotkey.
-    //
-    // 	* 'BalanceWithdrawalError':
-    // 		- Errors stemming from transaction pallet.
-    //
-    // 	* 'TxRateLimitExceeded':
-    // 		- Thrown if key has hit transaction rate limit
-    //
+    /// ---- The implementation for the extrinsic decrease_take
+    ///
+    /// # Args:
+    /// * 'origin': (<T as frame_system::Config>::RuntimeOrigin):
+    ///     - The signature of the caller's coldkey.
+    ///
+    /// * 'hotkey' (T::AccountId):
+    ///     - The hotkey we are delegating (must be owned by the coldkey.)
+    ///
+    /// * 'take' (u16):
+    ///     - The stake proportion that this hotkey takes from delegations for subnet ID.
+    ///
+    /// # Event:
+    /// * TakeDecreased;
+    ///     - On successfully setting a decreased take for this hotkey.
+    ///
+    /// # Raises:
+    /// * 'NotRegistered':
+    ///     - The hotkey we are delegating is not registered on the network.
+    ///
+    /// * 'NonAssociatedColdKey':
+    ///     - The hotkey we are delegating is not owned by the calling coldket.
+    ///
+    /// * 'InvalidTake':
+    ///     - The delegate is setting a take which is not lower than the previous.
+    ///
+    pub fn do_decrease_take(
+        origin: T::RuntimeOrigin,
+        hotkey: T::AccountId,
+        take: u16,
+    ) -> dispatch::DispatchResult {
+        // --- 1. We check the coldkey signature.
+        let coldkey = ensure_signed(origin)?;
+        log::info!(
+            "do_decrease_take( origin:{:?} hotkey:{:?}, take:{:?} )",
+            coldkey,
+            hotkey,
+            take
+        );
+
+        // --- 2. Ensure we are delegating a known key.
+        //        Ensure that the coldkey is the owner.
+        Self::do_take_checks(&coldkey, &hotkey)?;
+
+        // --- 3. Ensure we are always strictly decreasing, never increasing take
+        if let Ok(current_take) = Delegates::<T>::try_get(&hotkey) {
+            ensure!(take < current_take, Error::<T>::InvalidTake);
+        }
+
+        // --- 3.1 Ensure take is within the min ..= InitialDefaultTake (18%) range
+        let min_take = MinTake::<T>::get();
+        ensure!(take >= min_take, Error::<T>::InvalidTake);
+
+        // --- 4. Set the new take value.
+        Delegates::<T>::insert(hotkey.clone(), take);
+
+        // --- 5. Emit the take value.
+        log::info!(
+            "TakeDecreased( coldkey:{:?}, hotkey:{:?}, take:{:?} )",
+            coldkey,
+            hotkey,
+            take
+        );
+        Self::deposit_event(Event::TakeDecreased(coldkey, hotkey, take));
+
+        // --- 6. Ok and return.
+        Ok(())
+    }
+
+    /// ---- The implementation for the extrinsic increase_take
+    ///
+    /// # Args:
+    /// * 'origin': (<T as frame_system::Config>::RuntimeOrigin):
+    ///     - The signature of the caller's coldkey.
+    ///
+    /// * 'hotkey' (T::AccountId):
+    ///     - The hotkey we are delegating (must be owned by the coldkey.)
+    ///
+    /// * 'take' (u16):
+    ///     - The stake proportion that this hotkey takes from delegations for subnet ID.
+    ///
+    /// # Event:
+    /// * TakeIncreased;
+    ///     - On successfully setting a increased take for this hotkey.
+    ///
+    /// # Raises:
+    /// * 'NotRegistered':
+    ///     - The hotkey we are delegating is not registered on the network.
+    ///
+    /// * 'NonAssociatedColdKey':
+    ///     - The hotkey we are delegating is not owned by the calling coldket.
+    ///
+    /// * 'TxRateLimitExceeded':
+    ///     - Thrown if key has hit transaction rate limit
+    ///
+    /// * 'InvalidTake':
+    ///     - The delegate is setting a take which is not greater than the previous.
+    ///
+    pub fn do_increase_take(
+        origin: T::RuntimeOrigin,
+        hotkey: T::AccountId,
+        take: u16,
+    ) -> dispatch::DispatchResult {
+        // --- 1. We check the coldkey signature.
+        let coldkey = ensure_signed(origin)?;
+        log::info!(
+            "do_increase_take( origin:{:?} hotkey:{:?}, take:{:?} )",
+            coldkey,
+            hotkey,
+            take
+        );
+
+        // --- 2. Ensure we are delegating a known key.
+        //        Ensure that the coldkey is the owner.
+        Self::do_take_checks(&coldkey, &hotkey)?;
+
+        // --- 3. Ensure we are strinctly increasing take
+        if let Ok(current_take) = Delegates::<T>::try_get(&hotkey) {
+            ensure!(take > current_take, Error::<T>::InvalidTake);
+        }
+
+        // --- 4. Ensure take is within the min ..= InitialDefaultTake (18%) range
+        let max_take = MaxTake::<T>::get();
+        ensure!(take <= max_take, Error::<T>::InvalidTake);
+
+        // --- 5. Enforce the rate limit (independently on do_add_stake rate limits)
+        let block: u64 = Self::get_current_block_as_u64();
+        ensure!(
+            !Self::exceeds_tx_delegate_take_rate_limit(
+                Self::get_last_tx_block_delegate_take(&coldkey),
+                block
+            ),
+            Error::<T>::TxRateLimitExceeded
+        );
+
+        // Set last block for rate limiting
+        Self::set_last_tx_block_delegate_take(&coldkey, block);
+
+        // --- 6. Set the new take value.
+        Delegates::<T>::insert(hotkey.clone(), take);
+
+        // --- 7. Emit the take value.
+        log::info!(
+            "TakeIncreased( coldkey:{:?}, hotkey:{:?}, take:{:?} )",
+            coldkey,
+            hotkey,
+            take
+        );
+        Self::deposit_event(Event::TakeIncreased(coldkey, hotkey, take));
+
+        // --- 8. Ok and return.
+        Ok(())
+    }
+
+    /// ---- The implementation for the extrinsic add_stake: Adds stake to a hotkey account.
+    ///
+    /// # Args:
+    /// * 'origin': (<T as frame_system::Config>RuntimeOrigin):
+    ///     -  The signature of the caller's coldkey.
+    ///
+    /// * 'hotkey' (T::AccountId):
+    ///     -  The associated hotkey account.
+    ///
+    /// * 'stake_to_be_added' (u64):
+    ///     -  The amount of stake to be added to the hotkey staking account.
+    ///
+    /// # Event:
+    /// * StakeAdded;
+    ///     -  On the successfully adding stake to a global account.
+    ///
+    /// # Raises:
+    /// * 'NotEnoughBalanceToStake':
+    ///     -  Not enough balance on the coldkey to add onto the global account.
+    ///
+    /// * 'NonAssociatedColdKey':
+    ///     -  The calling coldkey is not associated with this hotkey.
+    ///
+    /// * 'BalanceWithdrawalError':
+    ///     -  Errors stemming from transaction pallet.
+    ///
+    /// * 'TxRateLimitExceeded':
+    ///     -  Thrown if key has hit transaction rate limit
+    ///
     pub fn do_add_stake(
         origin: T::RuntimeOrigin,
         hotkey: T::AccountId,
@@ -210,39 +360,35 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    // ---- The implementation for the extrinsic remove_stake: Removes stake from a hotkey account and adds it onto a coldkey.
-    //
-    // # Args:
-    // 	* 'origin': (<T as frame_system::Config>RuntimeOrigin):
-    // 		- The signature of the caller's coldkey.
-    //
-    // 	* 'hotkey' (T::AccountId):
-    // 		- The associated hotkey account.
-    //
-    // 	* 'stake_to_be_added' (u64):
-    // 		- The amount of stake to be added to the hotkey staking account.
-    //
-    // # Event:
-    // 	* StakeRemoved;
-    // 		- On the successfully removing stake from the hotkey account.
-    //
-    // # Raises:
-    // 	* 'NotRegistered':
-    // 		- Thrown if the account we are attempting to unstake from is non existent.
-    //
-    // 	* 'NonAssociatedColdKey':
-    // 		- Thrown if the coldkey does not own the hotkey we are unstaking from.
-    //
-    // 	* 'NotEnoughStaketoWithdraw':
-    // 		- Thrown if there is not enough stake on the hotkey to withdwraw this amount.
-    //
-    // 	* 'CouldNotConvertToBalance':
-    // 		- Thrown if we could not convert this amount to a balance.
-    //
-    // 	* 'TxRateLimitExceeded':
-    // 		- Thrown if key has hit transaction rate limit
-    //
-    //
+    /// ---- The implementation for the extrinsic remove_stake: Removes stake from a hotkey account and adds it onto a coldkey.
+    ///
+    /// # Args:
+    /// * 'origin': (<T as frame_system::Config>RuntimeOrigin):
+    ///     -  The signature of the caller's coldkey.
+    ///
+    /// * 'hotkey' (T::AccountId):
+    ///     -  The associated hotkey account.
+    ///
+    /// * 'stake_to_be_added' (u64):
+    ///     -  The amount of stake to be added to the hotkey staking account.
+    ///
+    /// # Event:
+    /// * StakeRemoved;
+    ///     -  On the successfully removing stake from the hotkey account.
+    ///
+    /// # Raises:
+    /// * 'NotRegistered':
+    ///     -  Thrown if the account we are attempting to unstake from is non existent.
+    ///
+    /// * 'NonAssociatedColdKey':
+    ///     -  Thrown if the coldkey does not own the hotkey we are unstaking from.
+    ///
+    /// * 'NotEnoughStaketoWithdraw':
+    ///     -  Thrown if there is not enough stake on the hotkey to withdwraw this amount.
+    ///
+    /// * 'TxRateLimitExceeded':
+    ///     -  Thrown if key has hit transaction rate limit
+    ///
     pub fn do_remove_stake(
         origin: T::RuntimeOrigin,
         hotkey: T::AccountId,
@@ -434,6 +580,12 @@ impl<T: Config> Pallet<T> {
         Owner::<T>::get(hotkey)
     }
 
+    // Returns the hotkey take
+    //
+    pub fn get_hotkey_take(hotkey: &T::AccountId) -> u16 {
+        Delegates::<T>::get(hotkey)
+    }
+
     // Returns true if the hotkey account has been created.
     //
     pub fn hotkey_account_exists(hotkey: &T::AccountId) -> bool {
@@ -552,7 +704,7 @@ impl<T: Config> Pallet<T> {
                 // Remove the stake from the nominator account. (this is a more forceful unstake operation which )
                 // Actually deletes the staking account.
                 Self::empty_stake_on_coldkey_hotkey_account(coldkey, hotkey);
-                // Convert the removed stake back to balance and add it to the coldkey account.
+                // Add the stake to the coldkey account.
                 Self::add_balance_to_coldkey_account(coldkey, stake);
             }
         }
@@ -640,8 +792,6 @@ impl<T: Config> Pallet<T> {
                 hotkey,
             )
         {
-            // Stake is successfully converted to balance.
-
             // Remove the stake from the coldkey - hotkey pairing.
             Self::decrease_stake_on_coldkey_hotkey_account(&delegate_coldkey_i, hotkey, stake_i);
 

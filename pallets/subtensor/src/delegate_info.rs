@@ -87,7 +87,7 @@ impl<T: Config> Pallet<T> {
         }
 
         let delegate: AccountIdOf<T> =
-            T::AccountId::decode(&mut delegate_account_vec.as_bytes_ref()).unwrap();
+            T::AccountId::decode(&mut delegate_account_vec.as_bytes_ref()).ok()?;
         // Check delegate exists
         if !<Delegates<T>>::contains_key(delegate.clone()) {
             return None;
@@ -97,6 +97,8 @@ impl<T: Config> Pallet<T> {
         Some(delegate_info)
     }
 
+    /// get all delegates info from storage
+    ///
     pub fn get_delegates() -> Vec<DelegateInfo<T>> {
         let mut delegates = Vec::<DelegateInfo<T>>::new();
         for delegate in <Delegates<T> as IterableStorageMap<T::AccountId, u16>>::iter_keys() {
@@ -107,13 +109,12 @@ impl<T: Config> Pallet<T> {
         delegates
     }
 
+    /// get all delegate info and staked token amount for a given delegatee account
+    ///
     pub fn get_delegated(delegatee_account_vec: Vec<u8>) -> Vec<(DelegateInfo<T>, Compact<u64>)> {
-        if delegatee_account_vec.len() != 32 {
+        let Ok(delegatee) = T::AccountId::decode(&mut delegatee_account_vec.as_bytes_ref()) else {
             return Vec::new(); // No delegates for invalid account
-        }
-
-        let delegatee: AccountIdOf<T> =
-            T::AccountId::decode(&mut delegatee_account_vec.as_bytes_ref()).unwrap();
+        };
 
         let mut delegates: Vec<(DelegateInfo<T>, Compact<u64>)> = Vec::new();
         for delegate in <Delegates<T> as IterableStorageMap<T::AccountId, u16>>::iter_keys() {

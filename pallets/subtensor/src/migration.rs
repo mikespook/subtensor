@@ -2,12 +2,12 @@ use super::*;
 use frame_support::traits::DefensiveResult;
 use frame_support::{
     pallet_prelude::{Identity, OptionQuery},
-    sp_std::vec::Vec,
     storage_alias,
     traits::{fungible::Inspect as _, Get, GetStorageVersion, StorageVersion},
     weights::Weight,
 };
 use log::info;
+use sp_std::vec::Vec;
 
 // TODO (camfairchild): TEST MIGRATION
 
@@ -89,7 +89,8 @@ pub fn migrate_transfer_ownership_to_foundation<T: Config>(coldkey: [u8; 32]) ->
 
         // We have to decode this using a byte slice as we don't have crypto-std
         let coldkey_account: <T as frame_system::Config>::AccountId =
-            <T as frame_system::Config>::AccountId::decode(&mut &coldkey[..]).unwrap();
+            <T as frame_system::Config>::AccountId::decode(&mut &coldkey[..])
+                .expect("coldkey is 32-byte array; qed");
         info!("Foundation coldkey: {:?}", coldkey_account);
 
         let current_block = Pallet::<T>::get_current_block_as_u64();
