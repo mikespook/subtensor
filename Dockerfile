@@ -19,9 +19,9 @@ LABEL ai.opentensor.image.authors="operations@opentensor.ai" \
 ENV RUST_BACKTRACE 1
 
 # Necessary libraries for Rust execution
-RUN apt-get update && \
-  apt-get install -y curl build-essential protobuf-compiler clang git && \
-  rm -rf /var/lib/apt/lists/*
+RUN apt-get update
+RUN apt-get install -y curl build-essential protobuf-compiler clang git
+RUN rm -rf /var/lib/apt/lists/*
 
 # Install cargo and Rust
 RUN set -o pipefail && curl https://sh.rustup.rs -sSf | sh -s -- -y
@@ -38,7 +38,7 @@ COPY Cargo.lock Cargo.toml /subtensor/
 
 # Specs
 COPY ./snapshot.json /subtensor/snapshot.json
-COPY ./raw_spec.json /subtensor/raw_spec.json
+COPY ./raw_spec_finney.json /subtensor/raw_spec_finney.json
 COPY ./raw_testspec.json /subtensor/raw_testspec.json
 
 # Copy our sources
@@ -59,8 +59,8 @@ EXPOSE 30333 9933 9944
 FROM $BASE_IMAGE AS subtensor
 
 COPY --from=builder /subtensor/snapshot.json /
-COPY --from=builder /subtensor/raw_spec.json /
+COPY --from=builder /subtensor/raw_spec_finney.json /
 COPY --from=builder /subtensor/raw_testspec.json /
 COPY --from=builder /subtensor/target/release/node-subtensor /usr/local/bin
 
-ENTRYPOINT ["/usr/local/bin/node-subtensor", "--chain=/raw_spec.json" , "--bootnodes=/ip4/13.58.175.193/tcp/30333/p2p/12D3KooWDe7g2JbNETiKypcKT1KsCEZJbTzEHCn8hpd4PHZ6pdz5"]
+ENTRYPOINT ["/usr/local/bin/node-subtensor", "--chain=/raw_spec_finney.json" , "--bootnodes=/ip4/13.58.175.193/tcp/30333/p2p/12D3KooWDe7g2JbNETiKypcKT1KsCEZJbTzEHCn8hpd4PHZ6pdz5"]
