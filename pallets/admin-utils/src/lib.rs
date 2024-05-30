@@ -66,10 +66,10 @@ pub mod pallet {
     pub enum Error<T> {
         /// The subnet does not exist, check the netuid parameter
         SubnetDoesNotExist,
-        /// The max allowed validator number to be set is larger than threshold
-        StorageValueOutOfRange,
-        /// The maximum allowed UIDs is out of boundary, it not allowed
-        MaxAllowedUIdsNotAllowed,
+        /// The maximum number of subnet validators must be less than the maximum number of allowed UIDs in the subnet.
+        MaxValidatorsLargerThanMaxUIds,
+        /// The maximum number of subnet validators must be more than the current number of UIDs already in the subnet.
+        MaxAllowedUIdsLessThanCurrentUIds,
     }
 
     /// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -385,7 +385,7 @@ pub mod pallet {
             );
             ensure!(
                 T::Subtensor::get_subnetwork_n(netuid) < max_allowed_uids,
-                Error::<T>::MaxAllowedUIdsNotAllowed
+                Error::<T>::MaxAllowedUIdsLessThanCurrentUIds
             );
             T::Subtensor::set_max_allowed_uids(netuid, max_allowed_uids);
             log::info!(
@@ -625,7 +625,7 @@ pub mod pallet {
             );
             ensure!(
                 max_allowed_validators <= T::Subtensor::get_max_allowed_uids(netuid),
-                Error::<T>::StorageValueOutOfRange
+                Error::<T>::MaxValidatorsLargerThanMaxUIds
             );
 
             T::Subtensor::set_max_allowed_validators(netuid, max_allowed_validators);
@@ -931,6 +931,72 @@ pub mod pallet {
             log::info!("TxMinDelegateTakeSet( tx_min_delegate_take: {:?} ) ", take);
             Ok(())
         }
+
+        /// The extrinsic sets the target stake per interval.
+        /// It is only callable by the root account.
+        /// The extrinsic will call the Subtensor pallet to set target stake per interval.
+        #[pallet::call_index(47)]
+        #[pallet::weight((0, DispatchClass::Operational, Pays::No))]
+        pub fn sudo_set_target_stakes_per_interval(
+            origin: OriginFor<T>,
+            target_stakes_per_interval: u64,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            T::Subtensor::set_target_stakes_per_interval(target_stakes_per_interval);
+            log::info!(
+                "TxTargetStakesPerIntervalSet( set_target_stakes_per_interval: {:?} ) ",
+                target_stakes_per_interval
+            );
+            Ok(())
+        }
+
+        /// The extrinsic sets the commit/reveal interval for a subnet.
+        /// It is only callable by the root account or subnet owner.
+        /// The extrinsic will call the Subtensor pallet to set the interval.
+        #[pallet::call_index(48)]
+        #[pallet::weight(T::WeightInfo::sudo_set_commit_reveal_weights_interval())]
+        pub fn sudo_set_commit_reveal_weights_interval(
+            origin: OriginFor<T>,
+            netuid: u16,
+            interval: u64,
+        ) -> DispatchResult {
+            T::Subtensor::ensure_subnet_owner_or_root(origin, netuid)?;
+
+            ensure!(
+                T::Subtensor::if_subnet_exist(netuid),
+                Error::<T>::SubnetDoesNotExist
+            );
+
+            T::Subtensor::set_commit_reveal_weights_interval(netuid, interval);
+            log::info!(
+                "SetWeightCommitInterval( netuid: {:?}, interval: {:?} ) ",
+                netuid,
+                interval
+            );
+            Ok(())
+        }
+
+        /// The extrinsic enabled/disables commit/reaveal for a given subnet.
+        /// It is only callable by the root account or subnet owner.
+        /// The extrinsic will call the Subtensor pallet to set the value.
+        #[pallet::call_index(49)]
+        #[pallet::weight(T::WeightInfo::sudo_set_commit_reveal_weights_enabled())]
+        pub fn sudo_set_commit_reveal_weights_enabled(
+            origin: OriginFor<T>,
+            netuid: u16,
+            enabled: bool,
+        ) -> DispatchResult {
+            T::Subtensor::ensure_subnet_owner_or_root(origin, netuid)?;
+
+            ensure!(
+                T::Subtensor::if_subnet_exist(netuid),
+                Error::<T>::SubnetDoesNotExist
+            );
+
+            T::Subtensor::set_commit_reveal_weights_enabled(netuid, enabled);
+            log::info!("ToggleSetWeightsCommitReveal( netuid: {:?} ) ", netuid);
+            Ok(())
+        }
     }
 }
 
@@ -1023,4 +1089,7 @@ pub trait SubtensorInterface<AccountId, Balance, RuntimeOrigin> {
     fn get_nominator_min_required_stake() -> u64;
     fn set_nominator_min_required_stake(min_stake: u64);
     fn clear_small_nominations();
+    fn set_target_stakes_per_interval(target_stakes_per_interval: u64);
+    fn set_commit_reveal_weights_interval(netuid: u16, interval: u64);
+    fn set_commit_reveal_weights_enabled(netuid: u16, enabled: bool);
 }

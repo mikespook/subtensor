@@ -14,10 +14,9 @@ use frame_support::{
     dispatch::DispatchResultWithPostInfo,
     genesis_builder_helper::{build_config, create_default_config},
     pallet_prelude::{DispatchError, Get},
-    traits::{fungible::HoldConsideration, LinearStoragePrice, OnRuntimeUpgrade},
+    traits::{fungible::HoldConsideration, LinearStoragePrice},
 };
 use frame_system::{EnsureNever, EnsureRoot, RawOrigin};
-use migrations::{account_data_migration, init_storage_versions};
 use pallet_commitments::CanCommit;
 use pallet_grandpa::{
     fg_primitives, AuthorityId as GrandpaId, AuthorityList as GrandpaAuthorityList,
@@ -149,7 +148,12 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 /// up by `pallet_aura` to implement `fn slot_duration()`.
 ///
 /// Change this to adjust the block time.
+#[cfg(not(feature = "fast-blocks"))]
 pub const MILLISECS_PER_BLOCK: u64 = 12000;
+
+/// Fast blocks for development
+#[cfg(feature = "fast-blocks")]
+pub const MILLISECS_PER_BLOCK: u64 = 250;
 
 // NOTE: Currently it is not possible to change the slot duration after the chain has started.
 //       Attempting to do so will brick block production.
@@ -793,7 +797,7 @@ parameter_types! {
     pub const SubtensorInitialPruningScore : u16 = u16::MAX;
     pub const SubtensorInitialBondsMovingAverage: u64 = 900_000;
     pub const SubtensorInitialDefaultTake: u16 = 11_796; // 18% honest number.
-    pub const SubtensorInitialMinTake: u16 = 0;
+    pub const SubtensorInitialMinTake: u16 = 5_898; // 9%
     pub const SubtensorInitialWeightsVersionKey: u64 = 0;
     pub const SubtensorInitialMinDifficulty: u64 = 10_000_000;
     pub const SubtensorInitialMaxDifficulty: u64 = u64::MAX / 4;
@@ -1126,6 +1130,18 @@ impl
     fn get_nominator_min_required_stake() -> u64 {
         SubtensorModule::get_nominator_min_required_stake()
     }
+
+    fn set_target_stakes_per_interval(target_stakes_per_interval: u64) {
+        SubtensorModule::set_target_stakes_per_interval(target_stakes_per_interval)
+    }
+
+    fn set_commit_reveal_weights_interval(netuid: u16, interval: u64) {
+        SubtensorModule::set_commit_reveal_weights_interval(netuid, interval);
+    }
+
+    fn set_commit_reveal_weights_enabled(netuid: u16, enabled: bool) {
+        SubtensorModule::set_commit_reveal_weights_enabled(netuid, enabled);
+    }
 }
 
 impl pallet_admin_utils::Config for Runtime {
@@ -1185,12 +1201,7 @@ pub type SignedExtra = (
     pallet_commitments::CommitmentsSignedExtension<Runtime>,
 );
 
-type Migrations = (
-    init_storage_versions::Migration,
-    account_data_migration::Migration,
-    pallet_multisig::migrations::v1::MigrateToV1<Runtime>,
-    pallet_grandpa::migrations::MigrateV4ToV5<Runtime>,
-);
+type Migrations = pallet_grandpa::migrations::MigrateV4ToV5<Runtime>;
 
 // Unchecked extrinsic type as expected by this runtime.
 pub type UncheckedExtrinsic =
